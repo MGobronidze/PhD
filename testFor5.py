@@ -1,33 +1,32 @@
-from itertools import product
-from collections import defaultdict
+import random
+from collections import Counter
 
-# 1. სიმრავლე X = {0, 1, 2, 3, 4}
-n = 5
-X = tuple(range(n))
-all_functions = list(product(X, repeat=n))
-
-# 2. ვფილტრავთ შუალედურ ფუნქციებს (რანგი 2, 3, 4)
-test_functions = [f for f in all_functions if 1 < len(set(f)) < n]
-print(f"შემოწმდება {len(test_functions)} ფუნქცია.")
-print(f"წყვილების მაქსიმალური რაოდენობა: {len(test_functions)**2:,}")
+# 1. პარამეტრები
+n = 20  # სიმრავლის ზომა
+max_attempts = 1_000_000  # რამდენი შემთხვევითი წყვილი შევამოწმოთ
 
 def get_kernel_blocks_sorted(f):
     blocks_dict = {}
     for x, y in enumerate(f):
         blocks_dict.setdefault(y, set()).add(x)
-    blocks = list(blocks_dict.values())
-    blocks.sort(key=lambda b: (len(b), sorted(list(b))), reverse=True)
-    return blocks
+    # ვიღებთ მხოლოდ ბლოკების ზომებს (უფრო სწრაფია)
+    return sorted([len(b) for b in blocks_dict.values()], reverse=True)
 
-def get_v_profile_sizes(g, f):
-    img = set(g)
-    sorted_blocks = get_kernel_blocks_sorted(f)
-    # ვაბრუნებთ მხოლოდ ზომებს დალაგებულად
-    v_sizes = tuple(sorted([len(block.intersection(img)) for block in sorted_blocks], reverse=True))
-    return v_sizes
+def get_v_profile_sizes(g, f_kernel_blocks_indices, img_g):
+    """ოპტიმიზებული პროფილი: მხოლოდ არანულოვანი ზომები"""
+    v_sizes = []
+    for block in f_kernel_blocks_indices:
+        intersection_size = len(block.intersection(img_g))
+        if intersection_size > 0:
+            v_sizes.append(intersection_size)
+    return tuple(sorted(v_sizes, reverse=True))
 
-def compose(f, g):
-    return tuple(f[g[x]] for x in X)
+def get_f_data(f):
+    """წინასწარ ამზადებს ფუნქციის კერნელურ ბლოკებს (ინდექსებს) და იმიჯს"""
+    blocks_dict = {}
+    for x, y in enumerate(f):
+        blocks_dict.setdefault(y, set()).add(x)
+    return list(blocks_dict.values()), set(f)
 
 def get_cycles(h):
     visited = [False] * n
@@ -45,47 +44,48 @@ def get_cycles(h):
                 cycle_lengths.append(len(path) - cycle_start_idx)
     return tuple(sorted(cycle_lengths))
 
-# -----------------------------------------------------------------------
-# ოპტიმიზებული ძიება
-# -----------------------------------------------------------------------
+def compose(f, g):
+    return tuple(f[x] for x in g) # უფრო სწრაფი ჩანაწერი პითონისთვის
 
-print("მიმდინარეობს ანალიზი...")
-counter_examples = []
-checked_pairs = 0
+print(f"დაიწყო n={n} შემთხვევების ძიება ({max_attempts:,} ცდა)...")
 
-# რადგან 9 მილიონი წყვილი ბევრია, ვიყენებთ ოპტიმიზაციას:
-# ჩვენ გვაინტერესებს მხოლოდ ისეთი (f,g), სადაც V(g,f) == V(f,g)
-for i, f in enumerate(test_functions):
-    if i % 100 == 0: print(f"დამუშავდა {i} ფუნქცია...")
-    for g in test_functions:
-        v_gf = get_v_profile_sizes(g, f)
-        v_fg = get_v_profile_sizes(f, g)
+found = 0
+for attempt in range(1, max_attempts + 1):
+    # შემთხვევითი ფუნქციების გენერაცია (რანგი 2-დან n-1-მდე)
+    f = tuple(random.randint(0, n-1) for _ in range(n))
+    g = tuple(random.randint(0, n-1) for _ in range(n))
+    
+    # ვფილტრავთ რანგს (რომ არ იყოს ტრივიალური)
+    rf, rg = len(set(f)), len(set(g))
+    if rf < 2 or rf == n or rg < 2 or rg == n:
+        continue
+
+    # მონაცემების მომზადება
+    f_blocks, f_img = get_f_data(f)
+    g_blocks, g_img = get_f_data(g)
+
+    # V-პროფილების შედარება
+    v_gf = get_v_profile_sizes(g, f_blocks, g_img)
+    v_fg = get_v_profile_sizes(f, g_blocks, f_img)
+
+    if v_gf == v_fg:
+        fog = compose(f, g)
+        gof = compose(g, f)
         
-        if v_gf == v_fg:
-            fog = compose(f, g)
-            gof = compose(g, f)
-            
-            cycles_fog = get_cycles(fog)
-            cycles_gof = get_cycles(gof)
-            
-            if cycles_fog != cycles_gof:
-                counter_examples.append({
-                    'f': f, 'g': g,
-                    'v_profile': v_gf,
-                    'cycles_fog': cycles_fog,
-                    'cycles_gof': cycles_gof
-                })
-                # თუ ერთი მაინც ვიპოვეთ, შეგვიძლია გამოვიტანოთ
-                if len(counter_examples) == 1:
-                    print("\n!!! პირველი საეჭვო წყვილი !!!")
+        cycles_fog = get_cycles(fog)
+        cycles_gof = get_cycles(gof)
+        
+        if cycles_fog != cycles_gof:
+            print(f"\n[!] ნაპოვნია კონტრმაგალითი {attempt}-ე ცდაზე!")
+            print(f"f: {f}")
+            print(f"g: {g}")
+            print(f"V-პროფილი: {v_gf}")
+            print(f"Cycles(f o g): {cycles_fog} | Cycles(g o f): {cycles_gof}")
+            found += 1
+            break # პირველივეზე ვჩერდებით
 
-# -----------------------------------------------------------------------
-# შედეგები
-# -----------------------------------------------------------------------
-print(f"\nანალიზი დასრულდა. სულ ნაპოვნია {len(counter_examples)} საეჭვო წყვილი.")
+    if attempt % 50000 == 0:
+        print(f"შემოწმდა {attempt} წყვილი...")
 
-for ce in counter_examples[:5]:
-    print("-" * 50)
-    print(f"f: {ce['f']}, g: {ce['g']}")
-    print(f"საერთო V-პროფილი: {ce['v_profile']}")
-    print(f"Cycles(f o g): {ce['cycles_fog']} | Cycles(g o f): {ce['cycles_gof']}")
+if found == 0:
+    print(f"\n{max_attempts} შემთხვევით წყვილში 'მოღალატე' ვერ მოიძებნა.")
